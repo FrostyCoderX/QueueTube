@@ -45,6 +45,7 @@ class App(ctk.CTk):
 
         self._build_ui()
         self._check_environment()
+        self._update_conflicts()
         self._poll()
 
     # ------------------------------------------------------------------
@@ -116,17 +117,28 @@ class App(ctk.CTk):
         ctk.CTkLabel(time_row, text="Start").pack(side="left")
         self._start_time = ctk.CTkEntry(time_row, width=90, placeholder_text="0:00")
         self._start_time.pack(side="left", padx=(6, 12))
-        self._start_time.bind("<FocusOut>", lambda _: self._format_time_field(self._start_time))
+        self._start_time.bind("<FocusOut>", lambda _: (
+            self._format_time_field(self._start_time), self._update_conflicts()
+        ))
         ctk.CTkLabel(time_row, text="End").pack(side="left")
         self._end_time = ctk.CTkEntry(time_row, width=90, placeholder_text="0:00")
         self._end_time.pack(side="left", padx=(6, 6))
-        self._end_time.bind("<FocusOut>", lambda _: self._format_time_field(self._end_time))
+        self._end_time.bind("<FocusOut>", lambda _: (
+            self._format_time_field(self._end_time), self._update_conflicts()
+        ))
         ctk.CTkLabel(time_row, text="(M:SS or H:MM:SS)", text_color="#666666",
                      font=("Segoe UI", 10)).pack(side="left", padx=(6, 0))
 
+        # Conflict warning — shown conditionally
+        self._conflict_label = ctk.CTkLabel(
+            left, text="", anchor="w",
+            text_color="#ffcc44", font=("Segoe UI", 10),
+        )
+        self._conflict_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
         # Action buttons
         btn_row = ctk.CTkFrame(left, fg_color="transparent")
-        btn_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        btn_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self._download_btn = ctk.CTkButton(
             btn_row, text="↓  Download Queue", command=self._start_download, width=175
         )
@@ -153,18 +165,18 @@ class App(ctk.CTk):
         # Progress
         self._progress_bar = ctk.CTkProgressBar(left)
         self._progress_bar.set(0)
-        self._progress_bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        self._progress_bar.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         self._status_label = ctk.CTkLabel(left, text="Ready", anchor="w", text_color="#aaaaaa")
-        self._status_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self._status_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         # History table
         ctk.CTkLabel(left, text="History", anchor="w").grid(
-            row=6, column=0, sticky="w", pady=(0, 4)
+            row=7, column=0, sticky="w", pady=(0, 4)
         )
         self._history = HistoryTable(left, fg_color="transparent")
-        self._history.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=(0, 8))
-        left.grid_rowconfigure(7, weight=1)
+        self._history.grid(row=8, column=0, columnspan=2, sticky="nsew", pady=(0, 8))
+        left.grid_rowconfigure(8, weight=1)
 
         # Raw log toggle
         self._log_visible = False
@@ -176,7 +188,7 @@ class App(ctk.CTk):
             fg_color="#333",
             hover_color="#444",
         )
-        self._log_toggle_btn.grid(row=8, column=0, sticky="w", pady=(0, 4))
+        self._log_toggle_btn.grid(row=9, column=0, sticky="w", pady=(0, 4))
 
         self._log_box = ctk.CTkTextbox(
             left,
@@ -186,6 +198,7 @@ class App(ctk.CTk):
             state="disabled",
             wrap="none",
         )
+        # Not added to grid yet — shown on toggle (row 10)
 
     def _build_right(self, parent: ctk.CTkFrame) -> None:
         right = ctk.CTkScrollableFrame(parent, width=200)
@@ -209,9 +222,12 @@ class App(ctk.CTk):
 
         # Track checkboxes that need ffmpeg so we can disable them
         self._ffmpeg_checkboxes: list[ctk.CTkCheckBox] = []
+        # Track checkboxes incompatible with audio-only formats
+        self._video_only_checkboxes: list[ctk.CTkCheckBox] = []
 
         # Generic checkbox helper
-        def checkbox(text: str, key: str, needs_ffmpeg: bool = False) -> None:
+        def checkbox(text: str, key: str, needs_ffmpeg: bool = False,
+                     video_only: bool = False) -> None:
             nonlocal row
             var = ctk.BooleanVar(value=self._config[key])
             state = "normal" if (not needs_ffmpeg or self._has_ffmpeg) else "disabled"
@@ -226,6 +242,8 @@ class App(ctk.CTk):
             setattr(self, f"_var_{key}", var)
             if needs_ffmpeg:
                 self._ffmpeg_checkboxes.append(cb)
+            if video_only:
+                self._video_only_checkboxes.append(cb)
 
         # Format
         label("Format", pady_top=12)
@@ -234,7 +252,10 @@ class App(ctk.CTk):
             right,
             values=list(FORMAT_MAP.keys()),
             variable=self._format_var,
-            command=lambda _: self._save_setting("format", self._format_var.get()),
+            command=lambda _: (
+                self._save_setting("format", self._format_var.get()),
+                self._update_conflicts(),
+            ),
         ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
 
         # "Download playlists" is the inverse of yt-dlp's "noplaylist"
@@ -243,12 +264,15 @@ class App(ctk.CTk):
             right,
             text="Download playlists",
             variable=self._var_playlist,
-            command=lambda: self._save_setting("noplaylist", not self._var_playlist.get()),
+            command=lambda: (
+                self._save_setting("noplaylist", not self._var_playlist.get()),
+                self._update_conflicts(),
+            ),
         ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=4)
 
         checkbox("Auto-subfolders",         "auto_subfolders")
-        checkbox("Embed subtitles",         "embed_subtitles",  needs_ffmpeg=True)
-        checkbox("Embed metadata + thumb",  "embed_metadata",   needs_ffmpeg=True)
+        checkbox("Embed subtitles",         "embed_subtitles",  needs_ffmpeg=True, video_only=True)
+        checkbox("Embed metadata + thumb",  "embed_metadata",   needs_ffmpeg=True, video_only=True)
 
         # Transcript
         self._var_transcript_only = ctk.BooleanVar(
@@ -282,12 +306,7 @@ class App(ctk.CTk):
             justify="left",
         ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
 
-        # Music
-        ctk.CTkFrame(right, height=1, fg_color="#444").grid(
-            row=next_row(), column=0, sticky="ew", padx=12, pady=(4, 6)
-        )
-        label("Music", pady_top=0)
-
+        # SponsorBlock — works for both video and audio
         checkbox("Skip sponsor segments", "sponsorblock", needs_ffmpeg=True)
         ctk.CTkLabel(
             right,
@@ -297,6 +316,12 @@ class App(ctk.CTk):
             font=("Segoe UI", 10),
             justify="left",
         ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
+
+        # Music
+        ctk.CTkFrame(right, height=1, fg_color="#444").grid(
+            row=next_row(), column=0, sticky="ew", padx=12, pady=(4, 6)
+        )
+        label("Music", pady_top=0)
 
         checkbox("Embed album art", "embed_thumbnail", needs_ffmpeg=True)
         ctk.CTkLabel(
@@ -470,7 +495,7 @@ class App(ctk.CTk):
             self._log_box.grid_forget()
             self._log_toggle_btn.configure(text="≡  Show Logs")
         else:
-            self._log_box.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+            self._log_box.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(0, 8))
             self._log_toggle_btn.configure(text="≡  Hide Logs")
         self._log_visible = not self._log_visible
 
@@ -586,6 +611,31 @@ class App(ctk.CTk):
     def _save_setting(self, key: str, value) -> None:
         self._config[key] = value
         save_config(self._config)
+
+    def _update_conflicts(self) -> None:
+        """Disable incompatible options and show warnings based on current settings."""
+        fmt = self._format_var.get()
+        is_audio_only = fmt.startswith("Audio Only")
+        has_time = bool(self._start_time.get().strip() or self._end_time.get().strip())
+        is_playlist = self._var_playlist.get()
+
+        # Grey out video-only checkboxes when audio-only format is selected
+        for cb in self._video_only_checkboxes:
+            if is_audio_only:
+                cb.configure(state="disabled")
+            elif self._has_ffmpeg:
+                cb.configure(state="normal")
+
+        # Collect warnings
+        warnings: list[str] = []
+        if is_audio_only and is_playlist:
+            warnings.append("⚠  Playlist + Audio Only: each item will be extracted as audio.")
+        if has_time and is_playlist:
+            warnings.append("⚠  Time-slicing applies the same timestamps to every video in the playlist.")
+        if is_audio_only and has_time and not self._has_ffmpeg:
+            warnings.append("⚠  Time-slicing audio requires ffmpeg.")
+
+        self._conflict_label.configure(text="\n".join(warnings))
 
     def _check_environment(self) -> None:
         warnings = []
