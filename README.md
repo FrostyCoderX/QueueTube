@@ -62,7 +62,7 @@ Works with YouTube, Vimeo, SoundCloud, and [1000+ other sites](https://github.co
 ### Windows
 
 ```bash
-git clone https://github.com/your-username/queuetube.git
+git clone https://github.com/FrostyCoderX/queuetube.git
 cd queuetube
 python -m venv venv
 venv\Scripts\activate
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/your-username/queuetube.git
+git clone https://github.com/FrostyCoderX/queuetube.git
 cd queuetube
 python3 -m venv venv
 source venv/bin/activate
