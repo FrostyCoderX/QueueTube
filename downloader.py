@@ -180,15 +180,23 @@ class Downloader:
             "writethumbnail":   True,  # Save thumbnail alongside video for Explorer previews
         }
 
-        if fmt_string is None:
-            # Audio Only (MP3) — requires ffmpeg
+        if fmt_string and fmt_string.startswith("audio:"):
+            codec = fmt_string.split(":")[1]
             opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [{
-                "key":            "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-            }]
+            if codec == "opus":
+                # Keep original Opus stream — no re-encoding, best quality
+                opts["postprocessors"] = [{
+                    "key":            "FFmpegExtractAudio",
+                    "preferredcodec": "opus",
+                    "preferredquality": "0",
+                }]
+            else:
+                opts["postprocessors"] = [{
+                    "key":            "FFmpegExtractAudio",
+                    "preferredcodec": codec,
+                }]
         else:
-            opts["format"] = fmt_string
+            opts["format"] = fmt_string or "bestvideo+bestaudio/best"
 
         if config.get("transcript_only"):
             lang = config.get("transcript_lang", "en").strip() or "en"

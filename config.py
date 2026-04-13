@@ -35,7 +35,8 @@ FORMAT_MAP: dict[str, str | None] = {
     "1080p Limit (MP4)":    "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
     "720p Limit":           "bestvideo[height<=720]+bestaudio/best",
     "720p Limit (MP4)":     "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
-    "Audio Only (MP3)":     None,
+    "Audio Only (MP3)":     "audio:mp3",
+    "Audio Only (Opus)":    "audio:opus",
 }
 
 

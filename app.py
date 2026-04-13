@@ -558,26 +558,24 @@ class App(ctk.CTk):
 
     @staticmethod
     def _format_time_field(entry: ctk.CTkEntry) -> None:
-        """Auto-format a time entry: '130' → '1:30', '90' → '1:30', '3661' → '1:01:01'."""
+        """Auto-format a time entry using shorthand:
+        '30' → '0:30', '130' → '1:30', '1030' → '10:30', '10510' → '1:05:10'.
+        Last 2 digits = seconds, next 2 = minutes, remainder = hours.
+        """
         raw = entry.get().strip()
-        if not raw:
-            return
-        # Already has colons — leave it alone
-        if ":" in raw:
+        if not raw or ":" in raw:
             return
         try:
-            total = int(raw)
+            int(raw)  # validate it's all digits
         except ValueError:
             return
-        if total < 60:
-            formatted = f"0:{total:02d}"
-        elif total < 3600:
-            formatted = f"{total // 60}:{total % 60:02d}"
-        else:
-            h = total // 3600
-            m = (total % 3600) // 60
-            s = total % 60
+        s = int(raw[-2:]) if len(raw) >= 2 else int(raw)
+        m = int(raw[-4:-2]) if len(raw) >= 3 else 0
+        h = int(raw[:-4]) if len(raw) >= 5 else 0
+        if h:
             formatted = f"{h}:{m:02d}:{s:02d}"
+        else:
+            formatted = f"{m}:{s:02d}"
         entry.delete(0, "end")
         entry.insert(0, formatted)
 
