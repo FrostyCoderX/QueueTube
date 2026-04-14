@@ -91,6 +91,7 @@ class Downloader:
             self.event_queue.put(("progress", 0.0))
 
             opts = self._build_opts(config, start_time, end_time)
+            fmt_string = FORMAT_MAP.get(config.get("format", "Best Available"), "")
             success = True
             meta: dict = {"url": url, "title": url, "size": "—", "resolution": "—", "path": ""}
             total_filesize: list[int] = [0]  # mutable container for closure
@@ -121,8 +122,13 @@ class Downloader:
                     if info.get("height"):
                         meta["resolution"] = f"{info.get('width', '?')}×{info['height']}"
                     elif meta["resolution"] == "—":
-                        # No video resolution set yet — must be audio-only
-                        meta["resolution"] = info.get("acodec", "audio")
+                        # Audio-only: show the requested target codec (MP3/OPUS),
+                        # not the source stream codec (which YouTube serves as opus
+                        # internally regardless of what we asked for).
+                        if fmt_string and fmt_string.startswith("audio:"):
+                            meta["resolution"] = fmt_string.split(":")[1].upper()
+                        else:
+                            meta["resolution"] = info.get("acodec", "audio")
                     # Accumulate size across streams (video + audio downloaded separately)
                     filesize = info.get("filesize") or info.get("filesize_approx") or 0
                     total_filesize[0] += filesize
@@ -183,18 +189,10 @@ class Downloader:
         if fmt_string and fmt_string.startswith("audio:"):
             codec = fmt_string.split(":")[1]
             opts["format"] = "bestaudio/best"
-            if codec == "opus":
-                # Keep original Opus stream — no re-encoding, best quality
-                opts["postprocessors"] = [{
-                    "key":            "FFmpegExtractAudio",
-                    "preferredcodec": "opus",
-                    "preferredquality": "0",
-                }]
-            else:
-                opts["postprocessors"] = [{
-                    "key":            "FFmpegExtractAudio",
-                    "preferredcodec": codec,
-                }]
+            opts["postprocessors"] = [{
+                "key":            "FFmpegExtractAudio",
+                "preferredcodec": codec,
+            }]
         else:
             opts["format"] = fmt_string or "bestvideo+bestaudio/best"
 
