@@ -55,6 +55,8 @@ class HistoryTable(ctk.CTkFrame):
 
         self._tree.tag_configure("success", foreground="#4caf50")
         self._tree.tag_configure("failure", foreground="#f44336")
+        self._tree.tag_configure("stopped", foreground="#ffb84d")
+        self._tree.tag_configure("odd", background="#262626")
 
         scrollbar = ctk.CTkScrollbar(self, command=self._tree.yview)
         self._tree.configure(yscrollcommand=scrollbar.set)
@@ -67,7 +69,13 @@ class HistoryTable(ctk.CTkFrame):
     def add_entry(self, meta: dict) -> None:
         """Add a completed download entry. Called from the UI thread."""
         status = meta.get("status", "—")
-        tag = "success" if "Success" in status else "failure"
+        if "Success" in status:
+            tag = "success"
+        elif "Stopped" in status:
+            tag = "stopped"
+        else:
+            tag = "failure"
+        parity = "odd" if len(self._tree.get_children()) % 2 else ""
 
         iid = self._tree.insert(
             "",
@@ -78,7 +86,7 @@ class HistoryTable(ctk.CTkFrame):
                 meta.get("resolution", "—"),
                 status,
             ),
-            tags=(tag,),
+            tags=(tag, parity),
         )
 
         path = meta.get("path", "")

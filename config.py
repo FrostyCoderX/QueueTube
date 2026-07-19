@@ -17,6 +17,7 @@ DEFAULTS: dict = {
     "transcript_lang": "en",
     "sponsorblock": False,
     "embed_thumbnail": False,
+    "save_thumbnail": False,
     "filename_template": "Title",
 }
 

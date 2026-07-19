@@ -95,9 +95,17 @@ class Downloader:
             # One meta dict per completed video, keyed by video id — a playlist
             # URL yields multiple entries, each getting its own history row.
             entries: dict[str, dict] = {}
+            # The video currently being downloaded — on cancel, this is the one
+            # entry that must not be reported as a success.
+            current: dict = {"vid": None, "title": None}
 
             def progress_hook(d: dict) -> None:
                 if d["status"] == "downloading":
+                    if self._stop_flag.is_set():
+                        raise ydl_utils.DownloadCancelled("Stopped by user")
+                    info = d.get("info_dict", {})
+                    current["vid"] = info.get("id")
+                    current["title"] = info.get("title") or current["title"]
                     total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     downloaded = d.get("downloaded_bytes", 0)
                     if total_bytes:
@@ -142,12 +150,17 @@ class Downloader:
             opts["progress_hooks"] = [progress_hook]
 
             raised = False
+            cancelled = False
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ret = ydl.download([url])
                     if ret != 0:
                         success = False
                         self.event_queue.put(("log", f"[ERROR] yt-dlp returned error code {ret}"))
+            except ydl_utils.DownloadCancelled:
+                success = False
+                cancelled = True
+                self.event_queue.put(("log", "[INFO] Download stopped by user"))
             except yt_dlp.utils.DownloadError as exc:
                 success = False
                 raised = True
@@ -157,14 +170,26 @@ class Downloader:
                 raised = True
                 self.event_queue.put(("log", f"[ERROR] Unexpected error: {exc}"))
 
-            # Emit one history row per completed video. An exception means the
-            # last (or only) entry didn't survive — mark collected entries failed.
-            for meta in entries.values():
+            # Emit one history row per video. On cancel, only the video that was
+            # mid-download is marked stopped — earlier entries completed fine.
+            # On error, collected entries didn't survive postprocessing.
+            for vid, meta in entries.items():
                 meta.pop("_bytes", None)
-                meta["status"] = "✗ Failed" if raised else "✓ Success"
+                if cancelled and vid == current["vid"]:
+                    meta["status"] = "■ Stopped"
+                elif raised:
+                    meta["status"] = "✗ Failed"
+                else:
+                    meta["status"] = "✓ Success"
                 self.event_queue.put(("history", meta))
 
-            if not entries:
+            if cancelled:
+                if current["vid"] not in entries:
+                    self.event_queue.put(("history", {
+                        "url": url, "title": current["title"] or url, "size": "—",
+                        "resolution": "—", "path": "", "status": "■ Stopped",
+                    }))
+            elif not entries:
                 # Nothing downloaded: transcript-only mode is the one legitimate
                 # case (skip_download never fires the finished hook).
                 status = "✓ Success" if success and config.get("transcript_only") else "✗ Failed"
@@ -197,6 +222,7 @@ class Downloader:
             outtmpl = f"{filename}.%(ext)s"
 
         has_ffmpeg = shutil.which("ffmpeg") is not None
+        save_thumb = bool(config.get("save_thumbnail", False))
 
         opts: dict = {
             "outtmpl":          outtmpl,
@@ -205,7 +231,7 @@ class Downloader:
             "logger":           _QtLogger(self.event_queue),
             "quiet":            True,
             "no_warnings":      False,
-            "writethumbnail":   True,  # Save thumbnail alongside video for Explorer previews
+            "writethumbnail":   save_thumb,
         }
 
         # In playlist mode, skip broken entries instead of aborting the whole
@@ -231,28 +257,26 @@ class Downloader:
             opts["subtitleslangs"]      = ["all"] if lang == "all" else [lang]
             opts["subtitlesformat"]     = "srt"
         elif config.get("embed_subtitles") and has_ffmpeg:
+            lang = config.get("transcript_lang", "en").strip() or "en"
             opts["writesubtitles"] = True
-            opts["subtitleslangs"] = ["en"]
+            opts["subtitleslangs"] = ["all"] if lang == "all" else [lang]
             opts["embedsubtitles"] = True
 
-        if config.get("embed_metadata") and has_ffmpeg:
-            opts["embedmetadata"]  = True
+        # Thumbnail embedding — shared by "Embed metadata" and "Embed album art".
+        # already_have_thumbnail keeps the thumbnail file on disk after embedding
+        # when the user also wants it saved standalone.
+        if (config.get("embed_metadata") or config.get("embed_thumbnail")) and has_ffmpeg:
             opts["embedthumbnail"] = True
             opts["writethumbnail"] = True
-            opts["postprocessors"] = opts.get("postprocessors", []) + [
-                {"key": "FFmpegMetadata"},
-                {"key": "EmbedThumbnail"},
+            pps = []
+            if config.get("embed_metadata"):
+                opts["embedmetadata"] = True
+                pps.append({"key": "FFmpegMetadata"})
+            pps += [
+                {"key": "EmbedThumbnail", "already_have_thumbnail": save_thumb},
                 {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"},
             ]
-
-        # Standalone album art — only if embed_metadata isn't already handling it
-        if config.get("embed_thumbnail") and not config.get("embed_metadata") and has_ffmpeg:
-            opts["writethumbnail"]  = True
-            opts["embedthumbnail"]  = True
-            opts["postprocessors"]  = opts.get("postprocessors", []) + [
-                {"key": "EmbedThumbnail"},
-                {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"},
-            ]
+            opts["postprocessors"] = opts.get("postprocessors", []) + pps
 
         # SponsorBlock — removes sponsored segments, intros, outros
         if config.get("sponsorblock") and has_ffmpeg:

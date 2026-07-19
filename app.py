@@ -28,6 +28,12 @@ POLL_INTERVAL_MS = 150
 _URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 
+def _wrap_path(path: str) -> str:
+    """Insert zero-width spaces after separators so long paths wrap there
+    instead of mid-word in wrapping labels."""
+    return path.replace("\\", "\​").replace("/", "/​")
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -110,6 +116,12 @@ class App(ctk.CTk):
         self._url_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self._url_box.bind("<KeyRelease>", lambda _: self._update_url_count())
         self._url_box.bind("<<Paste>>",    lambda _: self.after(50, self._update_url_count))
+        # Placeholder text (CTkTextbox has no built-in placeholder support)
+        self._url_text_color = self._url_box.cget("text_color")
+        self._url_ph_active = False
+        self._url_box.bind("<FocusIn>",  self._url_focus_in)
+        self._url_box.bind("<FocusOut>", self._url_focus_out)
+        self._show_url_placeholder()
 
         # Time range
         time_row = ctk.CTkFrame(left, fg_color="transparent")
@@ -140,7 +152,8 @@ class App(ctk.CTk):
         btn_row = ctk.CTkFrame(left, fg_color="transparent")
         btn_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self._download_btn = ctk.CTkButton(
-            btn_row, text="↓  Download Queue", command=self._start_download, width=175
+            btn_row, text="↓  Download Queue", command=self._start_download,
+            width=175, height=34, font=ctk.CTkFont(size=13, weight="bold"),
         )
         self._download_btn.pack(side="left")
         self._stop_btn = ctk.CTkButton(
@@ -148,6 +161,7 @@ class App(ctk.CTk):
             text="■  Stop",
             command=self._stop_download,
             width=80,
+            height=34,
             fg_color="#555",
             hover_color="#333",
             state="disabled",
@@ -158,6 +172,7 @@ class App(ctk.CTk):
             text="×  Clear",
             command=self._clear_urls,
             width=80,
+            height=34,
             fg_color="#444",
             hover_color="#333",
         ).pack(side="left", padx=(8, 0))
@@ -168,7 +183,9 @@ class App(ctk.CTk):
         self._progress_bar.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         self._status_label = ctk.CTkLabel(left, text="Ready", anchor="w", text_color="#aaaaaa")
-        self._status_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self._status_label.grid(row=6, column=0, sticky="w", pady=(0, 8))
+        self._pct_label = ctk.CTkLabel(left, text="", anchor="e", text_color="#aaaaaa")
+        self._pct_label.grid(row=6, column=1, sticky="e", pady=(0, 8))
 
         # History table
         ctk.CTkLabel(left, text="History", anchor="w").grid(
@@ -201,24 +218,40 @@ class App(ctk.CTk):
         # Not added to grid yet — shown on toggle (row 10)
 
     def _build_right(self, parent: ctk.CTkFrame) -> None:
-        right = ctk.CTkScrollableFrame(parent, width=200)
+        right = ctk.CTkScrollableFrame(parent, width=210)
         right.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
         right.grid_columnconfigure(0, weight=1)
 
         row = 0
-
-        def label(text: str, pady_top: int = 8) -> None:
-            nonlocal row
-            ctk.CTkLabel(right, text=text, anchor="w", text_color="#aaaaaa").grid(
-                row=row, column=0, sticky="w", padx=12, pady=(pady_top, 2)
-            )
-            row += 1
+        section_font = ctk.CTkFont(size=11, weight="bold")
+        hint_font = ctk.CTkFont(size=10)
 
         def next_row() -> int:
             nonlocal row
             r = row
             row += 1
             return r
+
+        def section(text: str, first: bool = False) -> None:
+            if not first:
+                ctk.CTkFrame(right, height=1, fg_color="#3a3a3a").grid(
+                    row=next_row(), column=0, sticky="ew", padx=12, pady=(14, 0)
+                )
+            ctk.CTkLabel(
+                right, text=text.upper(), anchor="w",
+                text_color="#8a8a8a", font=section_font,
+            ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(10, 2))
+
+        def mini_label(text: str) -> None:
+            ctk.CTkLabel(right, text=text, anchor="w", text_color="#aaaaaa").grid(
+                row=next_row(), column=0, sticky="w", padx=12, pady=(6, 2)
+            )
+
+        def hint(text: str, indent: int = 32) -> None:
+            ctk.CTkLabel(
+                right, text=text, anchor="w", text_color="#666666",
+                font=hint_font, justify="left",
+            ).grid(row=next_row(), column=0, sticky="w", padx=indent, pady=(0, 2))
 
         # Track checkboxes that need ffmpeg so we can disable them
         self._ffmpeg_checkboxes: list[ctk.CTkCheckBox] = []
@@ -228,8 +261,7 @@ class App(ctk.CTk):
         # Generic checkbox helper
         def checkbox(text: str, key: str, needs_ffmpeg: bool = False,
                      video_only: bool = False) -> None:
-            nonlocal row
-            var = ctk.BooleanVar(value=self._config[key])
+            var = ctk.BooleanVar(value=self._config.get(key, False))
             state = "normal" if (not needs_ffmpeg or self._has_ffmpeg) else "disabled"
             cb = ctk.CTkCheckBox(
                 right,
@@ -238,15 +270,15 @@ class App(ctk.CTk):
                 command=lambda: self._save_setting(key, var.get()),
                 state=state,
             )
-            cb.grid(row=next_row(), column=0, sticky="w", padx=12, pady=4)
+            cb.grid(row=next_row(), column=0, sticky="w", padx=12, pady=3)
             setattr(self, f"_var_{key}", var)
             if needs_ffmpeg:
                 self._ffmpeg_checkboxes.append(cb)
             if video_only:
                 self._video_only_checkboxes.append(cb)
 
-        # Format
-        label("Format", pady_top=12)
+        # -- Format ------------------------------------------------------
+        section("Format", first=True)
         self._format_var = ctk.StringVar(value=self._config["format"])
         ctk.CTkOptionMenu(
             right,
@@ -256,7 +288,7 @@ class App(ctk.CTk):
                 self._save_setting("format", self._format_var.get()),
                 self._update_conflicts(),
             ),
-        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
+        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(2, 4))
 
         # "Download playlists" is the inverse of yt-dlp's "noplaylist"
         self._var_playlist = ctk.BooleanVar(value=not self._config["noplaylist"])
@@ -268,72 +300,14 @@ class App(ctk.CTk):
                 self._save_setting("noplaylist", not self._var_playlist.get()),
                 self._update_conflicts(),
             ),
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=4)
+        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=3)
 
-        checkbox("Auto-subfolders",         "auto_subfolders")
-        checkbox("Embed subtitles",         "embed_subtitles",  needs_ffmpeg=True, video_only=True)
-        checkbox("Embed metadata + thumb",  "embed_metadata",   needs_ffmpeg=True, video_only=True)
-
-        # Transcript
-        self._var_transcript_only = ctk.BooleanVar(
-            value=self._config.get("transcript_only", False)
-        )
-        ctk.CTkCheckBox(
-            right,
-            text="Transcript only (.srt)",
-            variable=self._var_transcript_only,
-            command=lambda: self._save_setting("transcript_only", self._var_transcript_only.get()),
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(4, 2))
-
-        lang_row = ctk.CTkFrame(right, fg_color="transparent")
-        lang_row.grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
-        ctk.CTkLabel(lang_row, text="Lang:", text_color="#aaaaaa", width=36, anchor="w").pack(side="left")
-        self._transcript_lang = ctk.CTkEntry(lang_row, width=60, placeholder_text="en")
-        self._transcript_lang.insert(0, self._config.get("transcript_lang", "en"))
-        self._transcript_lang.pack(side="left", padx=(4, 0))
-        self._transcript_lang.bind(
-            "<FocusOut>",
-            lambda _: self._save_setting(
-                "transcript_lang", self._transcript_lang.get().strip() or "en"
-            ),
-        )
-        ctk.CTkLabel(
-            right,
-            text='Use "all" to get any\navailable language.',
-            anchor="w",
-            text_color="#666666",
-            font=("Segoe UI", 10),
-            justify="left",
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
-
-        # SponsorBlock — works for both video and audio
         checkbox("Skip sponsor segments", "sponsorblock", needs_ffmpeg=True)
-        ctk.CTkLabel(
-            right,
-            text="Cuts sponsors, intros & outros.\nRequires ffmpeg.",
-            anchor="w",
-            text_color="#666666",
-            font=("Segoe UI", 10),
-            justify="left",
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
+        hint("Cuts sponsors, intros & outros\nvia SponsorBlock. Needs ffmpeg.")
 
-        # Music
-        ctk.CTkFrame(right, height=1, fg_color="#444").grid(
-            row=next_row(), column=0, sticky="ew", padx=12, pady=(4, 6)
-        )
-        label("Music", pady_top=0)
-
-        checkbox("Embed album art", "embed_thumbnail", needs_ffmpeg=True)
-        ctk.CTkLabel(
-            right,
-            text="Embeds thumbnail as cover art.\nRequires ffmpeg.",
-            anchor="w",
-            text_color="#666666",
-            font=("Segoe UI", 10),
-            justify="left",
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
-
-        label("Filename template")
+        # -- Output ------------------------------------------------------
+        section("Output")
+        mini_label("Filename template")
         self._filename_template_var = ctk.StringVar(
             value=self._config.get("filename_template", "Title")
         )
@@ -344,16 +318,18 @@ class App(ctk.CTk):
             command=lambda _: self._save_setting(
                 "filename_template", self._filename_template_var.get()
             ),
-        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 8))
+        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
 
-        # Save location
-        ctk.CTkFrame(right, height=1, fg_color="#444").grid(
-            row=next_row(), column=0, sticky="ew", padx=12, pady=(4, 6)
-        )
-        label("Save location", pady_top=0)
+        checkbox("Auto-subfolders", "auto_subfolders")
+        hint("Sorts downloads into folders\nnamed after the uploader.")
+        checkbox("Save thumbnail file", "save_thumbnail")
+        hint("Keeps the thumbnail image\nnext to the download.")
+        checkbox("Embed metadata + thumb", "embed_metadata", needs_ffmpeg=True, video_only=True)
+
+        mini_label("Save location")
         self._save_loc_label = ctk.CTkLabel(
             right,
-            text=self._config["save_location"],
+            text=_wrap_path(self._config["save_location"]),
             anchor="w",
             text_color="#dddddd",
             wraplength=180,
@@ -364,37 +340,47 @@ class App(ctk.CTk):
             text="↗  Browse…",
             command=self._pick_folder,
             width=110,
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(4, 8))
+            fg_color="#333",
+            hover_color="#444",
+        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(4, 2))
 
-        # Custom args
-        label("Custom yt-dlp args")
-        self._custom_args = ctk.CTkEntry(right, placeholder_text="e.g. --no-mtime")
-        self._custom_args.insert(0, self._config.get("custom_args", ""))
-        self._custom_args.grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 16))
-        self._custom_args.bind(
+        # -- Subtitles ---------------------------------------------------
+        section("Subtitles")
+        checkbox("Embed subtitles", "embed_subtitles", needs_ffmpeg=True, video_only=True)
+        checkbox("Transcript only (.srt)", "transcript_only")
+        hint("Downloads just the transcript,\nskips the video itself.")
+
+        lang_row = ctk.CTkFrame(right, fg_color="transparent")
+        lang_row.grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(2, 0))
+        ctk.CTkLabel(lang_row, text="Language:", text_color="#aaaaaa").pack(side="left")
+        self._transcript_lang = ctk.CTkEntry(lang_row, width=60, placeholder_text="en")
+        self._transcript_lang.insert(0, self._config.get("transcript_lang", "en"))
+        self._transcript_lang.pack(side="left", padx=(6, 0))
+        self._transcript_lang.bind(
             "<FocusOut>",
-            lambda _: self._save_setting("custom_args", self._custom_args.get()),
+            lambda _: self._save_setting(
+                "transcript_lang", self._transcript_lang.get().strip() or "en"
+            ),
         )
+        hint('Applies to both options above.\nUse "all" for every language.', indent=12)
 
-        # Cookies from browser
-        label("Cookies from browser")
+        # -- Music -------------------------------------------------------
+        section("Music")
+        checkbox("Embed album art", "embed_thumbnail", needs_ffmpeg=True)
+        hint("Embeds the thumbnail as\ncover art. Needs ffmpeg.")
+
+        # -- Advanced ----------------------------------------------------
+        section("Advanced")
+        mini_label("Cookies from browser")
         self._cookies_var = ctk.StringVar(value=self._config.get("cookies_from_browser", "None"))
         ctk.CTkOptionMenu(
             right,
             values=BROWSER_OPTIONS,
             variable=self._cookies_var,
             command=lambda _: self._save_setting("cookies_from_browser", self._cookies_var.get()),
-        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
-        ctk.CTkLabel(
-            right,
-            text="For age-restricted or login-\ngated content. Log in via\nyour browser first.",
-            anchor="w",
-            text_color="#666666",
-            font=("Segoe UI", 10),
-            justify="left",
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 2))
+        hint("For age-restricted or login-\ngated content. Log in via\nyour browser first.", indent=12)
 
-        # Remote JS solver
         self._var_remote_components = ctk.BooleanVar(
             value=self._config.get("remote_components", False)
         )
@@ -405,34 +391,31 @@ class App(ctk.CTk):
             command=lambda: self._save_setting(
                 "remote_components", self._var_remote_components.get()
             ),
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 2))
-        ctk.CTkLabel(
-            right,
-            text="Fixes missing YouTube formats.\nDownloads solver script from\nGitHub on first use.",
-            anchor="w",
-            text_color="#666666",
-            font=("Segoe UI", 10),
-            justify="left",
-        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=next_row(), column=0, sticky="w", padx=12, pady=3)
+        hint("Fixes missing YouTube formats.\nDownloads solver script from\nGitHub on first use.")
 
-        # Separator
-        ctk.CTkFrame(right, height=1, fg_color="#444").grid(
-            row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 8)
+        mini_label("Custom yt-dlp args")
+        self._custom_args = ctk.CTkEntry(right, placeholder_text="e.g. --no-mtime")
+        self._custom_args.insert(0, self._config.get("custom_args", ""))
+        self._custom_args.grid(row=next_row(), column=0, sticky="ew", padx=12, pady=(0, 4))
+        self._custom_args.bind(
+            "<FocusOut>",
+            lambda _: self._save_setting("custom_args", self._custom_args.get()),
         )
 
-        # Update yt-dlp
-        label("Updater", pady_top=0)
         self._update_btn = ctk.CTkButton(
             right,
             text="↻  Update yt-dlp",
             command=self._update_ytdlp,
             width=150,
+            fg_color="#333",
+            hover_color="#444",
         )
-        self._update_btn.grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 4))
+        self._update_btn.grid(row=next_row(), column=0, sticky="w", padx=12, pady=(8, 2))
         self._update_status_label = ctk.CTkLabel(
             right, text="", anchor="w", text_color="#aaaaaa", font=("Segoe UI", 11)
         )
-        self._update_status_label.grid(row=next_row(), column=0, sticky="w", padx=12)
+        self._update_status_label.grid(row=next_row(), column=0, sticky="w", padx=12, pady=(0, 8))
 
     # ------------------------------------------------------------------
     # Actions
@@ -481,7 +464,7 @@ class App(ctk.CTk):
         urls = unique
 
         self._download_btn.configure(state="disabled")
-        self._stop_btn.configure(state="normal")
+        self._stop_btn.configure(state="normal", fg_color="#8b2e2e", hover_color="#a33e3e")
         self._history.clear()
         self._clear_log()
 
@@ -494,10 +477,13 @@ class App(ctk.CTk):
 
     def _stop_download(self) -> None:
         self._downloader.stop()
-        self._stop_btn.configure(state="disabled")
+        self._stop_btn.configure(state="disabled", fg_color="#555")
+        self._status_label.configure(text="Stopping…")
 
     def _clear_urls(self) -> None:
         self._url_box.delete("1.0", "end")
+        self._url_ph_active = False
+        self._show_url_placeholder()
         self._update_url_count()
 
     def _build_download_config(self) -> dict:
@@ -509,7 +495,7 @@ class App(ctk.CTk):
         )
         if folder:
             self._save_setting("save_location", folder)
-            self._save_loc_label.configure(text=folder)
+            self._save_loc_label.configure(text=_wrap_path(folder))
 
     def _toggle_log(self) -> None:
         if self._log_visible:
@@ -579,6 +565,9 @@ class App(ctk.CTk):
                 kind = event[0]
                 if kind == "progress":
                     self._progress_bar.set(event[1])
+                    self._pct_label.configure(
+                        text=f"{event[1] * 100:.0f}%" if event[1] > 0 else ""
+                    )
                 elif kind == "status":
                     self._status_label.configure(text=event[1])
                     # Update window title during downloads
@@ -592,8 +581,9 @@ class App(ctk.CTk):
                     self._history.add_entry(event[1])
                 elif kind == "done":
                     self._download_btn.configure(state="normal")
-                    self._stop_btn.configure(state="disabled")
+                    self._stop_btn.configure(state="disabled", fg_color="#555")
                     self._progress_bar.set(0)
+                    self._pct_label.configure(text="")
                     self.title("QueueTube")
         except queue.Empty:
             pass
@@ -626,7 +616,24 @@ class App(ctk.CTk):
         entry.delete(0, "end")
         entry.insert(0, formatted)
 
+    def _show_url_placeholder(self) -> None:
+        if not self._url_box.get("1.0", "end").strip():
+            self._url_ph_active = True
+            self._url_box.configure(text_color="#666666")
+            self._url_box.insert("1.0", "Paste video URLs — one per line")
+
+    def _url_focus_in(self, _event=None) -> None:
+        if self._url_ph_active:
+            self._url_ph_active = False
+            self._url_box.delete("1.0", "end")
+            self._url_box.configure(text_color=self._url_text_color)
+
+    def _url_focus_out(self, _event=None) -> None:
+        self._show_url_placeholder()
+
     def _get_urls(self) -> list[str]:
+        if self._url_ph_active:
+            return []
         raw = self._url_box.get("1.0", "end")
         return [u.strip() for u in raw.splitlines() if u.strip()]
 

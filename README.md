@@ -12,12 +12,13 @@ Works with YouTube, Vimeo, SoundCloud, and [1000+ other sites](https://github.co
 
 **Download**
 - Paste multiple URLs (one per line), download sequentially
-- Format selection: Best Available, Best (MP4), 1080p, 720p, Audio Only (MP3) — with MP4-specific variants
+- Format selection: Best Available, Best (MP4), 1080p, 720p, Audio Only (MP3/Opus) — with MP4-specific variants
 - Optional time-slicing with start/end timestamps (type seconds like `130` and it auto-formats to `1:30`)
 - Playlist support (opt-in)
 - Auto-subfolders by uploader name
 - Configurable filename templates (Title, Artist - Title, Uploader - Title)
-- Thumbnails saved alongside videos for Explorer/Finder previews
+- Optional thumbnail file saved alongside downloads (for Explorer/Finder previews)
+- Stop button cancels the current download within seconds — partial files resume on the next run
 
 **Music**
 - Audio-only MP3 extraction
@@ -28,7 +29,7 @@ Works with YouTube, Vimeo, SoundCloud, and [1000+ other sites](https://github.co
 **Subtitles & Transcripts**
 - Embed subtitles into video files
 - Transcript-only mode — downloads `.srt` files without the video
-- Configurable language (defaults to English, supports "all" for every available language)
+- Configurable language shared by embedding and transcript mode (defaults to English, supports "all" for every available language)
 
 **Metadata & Privacy**
 - Embed metadata and thumbnails
@@ -162,7 +163,8 @@ queuetube/
 
 - `config.json` is created on first run and stores your settings locally. It is gitignored.
 - Downloads run sequentially in a single background thread — the UI stays responsive throughout.
-- The Stop button halts the queue between URLs (won't kill a download mid-file).
+- The Stop button cancels the in-progress download safely; the partial `.part` file resumes if you download the same URL again.
+- In playlist mode, broken videos are skipped instead of aborting the playlist; each video gets its own history row.
 - Duplicate URLs in the queue are automatically removed.
 - Time-slicing cuts at the nearest keyframe for speed — cut points may be off by a few seconds.
-- A thumbnail `.jpg` is saved alongside every download for file manager previews.
+- "Save thumbnail file" keeps the video thumbnail next to the download for file manager previews (off by default).
