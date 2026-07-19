@@ -32,14 +32,22 @@ class HistoryTable(ctk.CTkFrame):
             fieldbackground="#2b2b2b",
             rowheight=24,
             font=("Segoe UI", 11),
+            borderwidth=0,
+            relief="flat",
         )
         style.configure(
             "History.Treeview.Heading",
             background="#1e1e1e",
             foreground="#aaaaaa",
             font=("Segoe UI", 11, "bold"),
+            borderwidth=0,
+            relief="flat",
+            padding=(6, 4),
         )
         style.map("History.Treeview", background=[("selected", "#3a3a3a")])
+        # Keep headings flat on hover/click — the default theme lightens them
+        style.map("History.Treeview.Heading",
+                  background=[("active", "#1e1e1e"), ("pressed", "#1e1e1e")])
 
         self._tree = ttk.Treeview(
             self,
