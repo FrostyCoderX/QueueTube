@@ -68,10 +68,13 @@ class HistoryTable(ctk.CTkFrame):
 
         self._tree.bind("<Button-3>", self._show_context_menu)
 
-        # Empty-state hint, overlaid on the tree until the first entry arrives
-        self._empty_label = ctk.CTkLabel(
-            self, text="Nothing downloaded yet", text_color="#555555",
-            fg_color="transparent",
+        # Empty-state hint, overlaid on the tree until the first entry arrives.
+        # Plain tk.Label so its background matches the Treeview exactly —
+        # CTkLabel's "transparent" resolves to the parent frame, not the tree.
+        self._empty_label = tk.Label(
+            self, text="Nothing downloaded yet",
+            foreground="#555555", background="#2b2b2b",
+            font=("Segoe UI", 11), borderwidth=0,
         )
         self._empty_label.place(relx=0.5, rely=0.45, anchor="center")
 
