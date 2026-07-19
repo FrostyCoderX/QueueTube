@@ -84,7 +84,6 @@ class Downloader:
         total = len(urls)
         for idx, url in enumerate(urls, start=1):
             if self._stop_flag.is_set():
-                self.event_queue.put(("status", "Stopped."))
                 break
 
             self.event_queue.put(("status", f"Downloading {idx} of {total}…"))
@@ -93,8 +92,9 @@ class Downloader:
             opts = self._build_opts(config, start_time, end_time)
             fmt_string = FORMAT_MAP.get(config.get("format", "Best Available"), "")
             success = True
-            meta: dict = {"url": url, "title": url, "size": "—", "resolution": "—", "path": ""}
-            total_filesize: list[int] = [0]  # mutable container for closure
+            # One meta dict per completed video, keyed by video id — a playlist
+            # URL yields multiple entries, each getting its own history row.
+            entries: dict[str, dict] = {}
 
             def progress_hook(d: dict) -> None:
                 if d["status"] == "downloading":
@@ -116,6 +116,11 @@ class Downloader:
                 elif d["status"] == "finished":
                     self.event_queue.put(("progress", 1.0))
                     info = d.get("info_dict", {})
+                    vid = info.get("id") or url
+                    meta = entries.setdefault(vid, {
+                        "url": url, "title": url, "size": "—",
+                        "resolution": "—", "path": "", "_bytes": 0,
+                    })
                     meta["title"] = info.get("title", url)
                     # Only update resolution from a stream that has video height;
                     # audio-only streams fire "finished" too and would overwrite it.
@@ -130,13 +135,13 @@ class Downloader:
                         else:
                             meta["resolution"] = info.get("acodec", "audio")
                     # Accumulate size across streams (video + audio downloaded separately)
-                    filesize = info.get("filesize") or info.get("filesize_approx") or 0
-                    total_filesize[0] += filesize
-                    meta["size"] = _fmt_size(total_filesize[0])
+                    meta["_bytes"] += info.get("filesize") or info.get("filesize_approx") or 0
+                    meta["size"] = _fmt_size(meta["_bytes"])
                     meta["path"] = d.get("filename", "")
 
             opts["progress_hooks"] = [progress_hook]
 
+            raised = False
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ret = ydl.download([url])
@@ -145,17 +150,34 @@ class Downloader:
                         self.event_queue.put(("log", f"[ERROR] yt-dlp returned error code {ret}"))
             except yt_dlp.utils.DownloadError as exc:
                 success = False
+                raised = True
                 self.event_queue.put(("log", f"[ERROR] {_ANSI_RE.sub('', str(exc))}"))
             except Exception as exc:
                 success = False
+                raised = True
                 self.event_queue.put(("log", f"[ERROR] Unexpected error: {exc}"))
 
-            # Safety net: if nothing was actually downloaded, mark as failed
-            if success and not meta["path"] and not config.get("transcript_only"):
-                success = False
+            # Emit one history row per completed video. An exception means the
+            # last (or only) entry didn't survive — mark collected entries failed.
+            for meta in entries.values():
+                meta.pop("_bytes", None)
+                meta["status"] = "✗ Failed" if raised else "✓ Success"
+                self.event_queue.put(("history", meta))
 
-            meta["status"] = "✓ Success" if success else "✗ Failed"
-            self.event_queue.put(("history", meta))
+            if not entries:
+                # Nothing downloaded: transcript-only mode is the one legitimate
+                # case (skip_download never fires the finished hook).
+                status = "✓ Success" if success and config.get("transcript_only") else "✗ Failed"
+                self.event_queue.put(("history", {
+                    "url": url, "title": url, "size": "—",
+                    "resolution": "—", "path": "", "status": status,
+                }))
+            elif not success and not raised:
+                # Playlist finished with some entries skipped (ignoreerrors)
+                self.event_queue.put(("history", {
+                    "url": url, "title": f"{url} — some items failed", "size": "—",
+                    "resolution": "—", "path": "", "status": "✗ Failed",
+                }))
 
         status_text = "Stopped." if self._stop_flag.is_set() else "All done."
         self.event_queue.put(("status", status_text))
@@ -186,6 +208,11 @@ class Downloader:
             "writethumbnail":   True,  # Save thumbnail alongside video for Explorer previews
         }
 
+        # In playlist mode, skip broken entries instead of aborting the whole
+        # playlist. download() returns nonzero so we still detect the failure.
+        if not config.get("noplaylist", True):
+            opts["ignoreerrors"] = True
+
         if fmt_string and fmt_string.startswith("audio:"):
             codec = fmt_string.split(":")[1]
             opts["format"] = "bestaudio/best"
@@ -201,7 +228,7 @@ class Downloader:
             opts["skip_download"]       = True
             opts["writesubtitles"]      = True
             opts["writeautomaticsub"]   = True
-            opts["subtitleslangs"]      = [lang, "all"] if lang != "all" else ["all"]
+            opts["subtitleslangs"]      = ["all"] if lang == "all" else [lang]
             opts["subtitlesformat"]     = "srt"
         elif config.get("embed_subtitles") and has_ffmpeg:
             opts["writesubtitles"] = True
@@ -231,16 +258,13 @@ class Downloader:
         if config.get("sponsorblock") and has_ffmpeg:
             opts["sponsorblock_remove"] = ["sponsor", "intro", "outro"]
 
-        # Time-slicing
+        # Time-slicing (the UI validates before starting; None here means invalid)
         if (start_time or end_time) and has_ffmpeg:
-            section = {}
-            if start_time:
-                section["start_time"] = _parse_time(start_time)
-            if end_time:
-                section["end_time"] = _parse_time(end_time)
-            if section:
+            start_s = parse_time(start_time) if start_time else 0.0
+            end_s = parse_time(end_time) if end_time else float("inf")
+            if start_s is not None and end_s is not None:
                 opts["download_ranges"] = ydl_utils.download_range_func(
-                    None, [(section.get("start_time", 0), section.get("end_time", float("inf")))]
+                    None, [(start_s, end_s)]
                 )
                 # Disabled force_keyframes_at_cuts — it re-encodes the entire segment
                 # which is extremely slow. Without it, cuts snap to the nearest keyframe
@@ -308,15 +332,18 @@ def _fmt_eta(seconds: int | float) -> str:
     return f"{h}h {m}m"
 
 
-def _parse_time(t: str) -> float:
-    """Convert HH:MM:SS or MM:SS or SS to seconds."""
+def parse_time(t: str) -> float | None:
+    """Convert H:MM:SS, M:SS, or SS to seconds. Returns None if invalid."""
     parts = t.strip().split(":")
+    if not 1 <= len(parts) <= 3:
+        return None
     try:
-        parts = [float(p) for p in parts]
+        nums = [float(p) for p in parts]
     except ValueError:
-        return 0.0
-    if len(parts) == 3:
-        return parts[0] * 3600 + parts[1] * 60 + parts[2]
-    if len(parts) == 2:
-        return parts[0] * 60 + parts[1]
-    return parts[0]
+        return None
+    if any(n < 0 for n in nums):
+        return None
+    seconds = 0.0
+    for n in nums:
+        seconds = seconds * 60 + n
+    return seconds

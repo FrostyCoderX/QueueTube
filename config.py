@@ -44,6 +44,8 @@ def load_config() -> dict:
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            return dict(DEFAULTS)
         for key, value in DEFAULTS.items():
             data.setdefault(key, value)
         return data

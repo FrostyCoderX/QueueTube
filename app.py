@@ -16,7 +16,7 @@ if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("queuetube.app")
 
 from config import FORMAT_MAP, BROWSER_OPTIONS, FILENAME_TEMPLATES, load_config, save_config
-from downloader import Downloader
+from downloader import Downloader, parse_time
 from history import HistoryTable
 
 ctk.set_appearance_mode("dark")
@@ -450,6 +450,27 @@ class App(ctk.CTk):
             self._status_label.configure(text=f"Invalid URL: {invalid[0][:60]}")
             return
 
+        # Validate time range — silently downloading the full video on a typo
+        # is the worst failure mode, so refuse to start instead.
+        start_raw = self._start_time.get().strip()
+        end_raw = self._end_time.get().strip()
+        start_s = parse_time(start_raw) if start_raw else None
+        end_s = parse_time(end_raw) if end_raw else None
+        if start_raw and start_s is None:
+            self._status_label.configure(text=f"Invalid start time: {start_raw}")
+            return
+        if end_raw and end_s is None:
+            self._status_label.configure(text=f"Invalid end time: {end_raw}")
+            return
+        if start_s is not None and end_s is not None and end_s <= start_s:
+            self._status_label.configure(text="End time must be after start time.")
+            return
+        if (start_raw or end_raw) and not self._has_ffmpeg:
+            self._status_label.configure(
+                text="Time-slicing requires ffmpeg — install it or clear the time fields."
+            )
+            return
+
         # Deduplicate while preserving order
         seen: set[str] = set()
         unique: list[str] = []
@@ -534,7 +555,8 @@ class App(ctk.CTk):
                 if "already satisfied" in result.stdout.lower():
                     msg = "Already up to date."
                 else:
-                    msg = "Updated successfully!"
+                    # The imported yt_dlp module stays the old version until relaunch
+                    msg = "Updated — restart QueueTube to apply."
             else:
                 msg = "Update failed — check logs."
                 self.after(0, lambda: self._append_log(result.stderr))
