@@ -28,10 +28,21 @@ POLL_INTERVAL_MS = 150
 _URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 
-def _wrap_path(path: str) -> str:
-    """Insert zero-width spaces after separators so long paths wrap there
-    instead of mid-word in wrapping labels."""
-    return path.replace("\\", "\​").replace("/", "/​")
+def _elide_path(path: str, max_len: int = 28) -> str:
+    """Shorten a long path to one line: C:/…/Documents/Folder.
+    Tk labels only wrap at spaces, so long paths would break mid-word."""
+    path = path.replace("\\", "/")
+    if len(path) <= max_len:
+        return path
+    parts = path.split("/")
+    head = parts[0] or "/"
+    keep = parts[-1]
+    for seg in reversed(parts[1:-1]):
+        cand = f"{seg}/{keep}"
+        if len(head) + len(cand) + 3 > max_len:
+            break
+        keep = cand
+    return f"{head}/…/{keep}"
 
 
 class App(ctk.CTk):
@@ -330,7 +341,7 @@ class App(ctk.CTk):
         mini_label("Save location")
         self._save_loc_label = ctk.CTkLabel(
             right,
-            text=_wrap_path(self._config["save_location"]),
+            text=_elide_path(self._config["save_location"]),
             anchor="w",
             text_color="#dddddd",
             wraplength=195,
@@ -497,7 +508,7 @@ class App(ctk.CTk):
         )
         if folder:
             self._save_setting("save_location", folder)
-            self._save_loc_label.configure(text=_wrap_path(folder))
+            self._save_loc_label.configure(text=_elide_path(folder))
 
     def _toggle_log(self) -> None:
         if self._log_visible:
