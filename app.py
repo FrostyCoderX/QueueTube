@@ -106,7 +106,7 @@ class App(ctk.CTk):
         # URL input header with live count
         url_header = ctk.CTkFrame(left, fg_color="transparent")
         url_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
-        ctk.CTkLabel(url_header, text="URLs  (one per line)", anchor="w").pack(side="left")
+        ctk.CTkLabel(url_header, text="Queue", anchor="w").pack(side="left")
         self._url_count_label = ctk.CTkLabel(
             url_header, text="", anchor="w", text_color="#666666"
         )
@@ -127,18 +127,18 @@ class App(ctk.CTk):
         time_row = ctk.CTkFrame(left, fg_color="transparent")
         time_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(time_row, text="Start").pack(side="left")
-        self._start_time = ctk.CTkEntry(time_row, width=90, placeholder_text="0:00")
+        self._start_time = ctk.CTkEntry(time_row, width=90)
         self._start_time.pack(side="left", padx=(6, 12))
         self._start_time.bind("<FocusOut>", lambda _: (
             self._format_time_field(self._start_time), self._update_conflicts()
         ))
         ctk.CTkLabel(time_row, text="End").pack(side="left")
-        self._end_time = ctk.CTkEntry(time_row, width=90, placeholder_text="0:00")
+        self._end_time = ctk.CTkEntry(time_row, width=90)
         self._end_time.pack(side="left", padx=(6, 6))
         self._end_time.bind("<FocusOut>", lambda _: (
             self._format_time_field(self._end_time), self._update_conflicts()
         ))
-        ctk.CTkLabel(time_row, text="(M:SS or H:MM:SS)", text_color="#666666",
+        ctk.CTkLabel(time_row, text="optional — M:SS or H:MM:SS", text_color="#666666",
                      font=("Segoe UI", 10)).pack(side="left", padx=(6, 0))
 
         # Conflict warning — shown conditionally
@@ -218,7 +218,7 @@ class App(ctk.CTk):
         # Not added to grid yet — shown on toggle (row 10)
 
     def _build_right(self, parent: ctk.CTkFrame) -> None:
-        right = ctk.CTkScrollableFrame(parent, width=210)
+        right = ctk.CTkScrollableFrame(parent, width=224)
         right.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
         right.grid_columnconfigure(0, weight=1)
 
@@ -324,7 +324,8 @@ class App(ctk.CTk):
         hint("Sorts downloads into folders\nnamed after the uploader.")
         checkbox("Save thumbnail file", "save_thumbnail")
         hint("Keeps the thumbnail image\nnext to the download.")
-        checkbox("Embed metadata + thumb", "embed_metadata", needs_ffmpeg=True, video_only=True)
+        checkbox("Embed metadata + thumbnail", "embed_metadata", needs_ffmpeg=True, video_only=True)
+        hint("Writes title, uploader & cover\nart into the video file.")
 
         mini_label("Save location")
         self._save_loc_label = ctk.CTkLabel(
@@ -332,7 +333,7 @@ class App(ctk.CTk):
             text=_wrap_path(self._config["save_location"]),
             anchor="w",
             text_color="#dddddd",
-            wraplength=180,
+            wraplength=195,
         )
         self._save_loc_label.grid(row=next_row(), column=0, sticky="w", padx=12)
         ctk.CTkButton(
@@ -347,6 +348,7 @@ class App(ctk.CTk):
         # -- Subtitles ---------------------------------------------------
         section("Subtitles")
         checkbox("Embed subtitles", "embed_subtitles", needs_ffmpeg=True, video_only=True)
+        hint("Adds selectable subtitles\ninto the video file.")
         checkbox("Transcript only (.srt)", "transcript_only")
         hint("Downloads just the transcript,\nskips the video itself.")
 

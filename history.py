@@ -50,8 +50,10 @@ class HistoryTable(ctk.CTkFrame):
         )
 
         for col, heading, width in zip(self.COLUMNS, self.HEADINGS, self.WIDTHS):
-            self._tree.heading(col, text=heading)
-            self._tree.column(col, width=width, minwidth=40, anchor="w")
+            self._tree.heading(col, text=heading, anchor="w")
+            # Only the title column absorbs extra width when the window grows
+            self._tree.column(col, width=width, minwidth=40, anchor="w",
+                              stretch=(col == "title"))
 
         self._tree.tag_configure("success", foreground="#4caf50")
         self._tree.tag_configure("failure", foreground="#f44336")
@@ -65,6 +67,13 @@ class HistoryTable(ctk.CTkFrame):
         scrollbar.pack(side="right", fill="y")
 
         self._tree.bind("<Button-3>", self._show_context_menu)
+
+        # Empty-state hint, overlaid on the tree until the first entry arrives
+        self._empty_label = ctk.CTkLabel(
+            self, text="Nothing downloaded yet", text_color="#555555",
+            fg_color="transparent",
+        )
+        self._empty_label.place(relx=0.5, rely=0.45, anchor="center")
 
     def add_entry(self, meta: dict) -> None:
         """Add a completed download entry. Called from the UI thread."""
@@ -93,6 +102,7 @@ class HistoryTable(ctk.CTkFrame):
         if path:
             self._paths[iid] = path
 
+        self._empty_label.place_forget()
         children = self._tree.get_children()
         if children:
             self._tree.see(children[-1])
@@ -100,6 +110,7 @@ class HistoryTable(ctk.CTkFrame):
     def clear(self) -> None:
         self._tree.delete(*self._tree.get_children())
         self._paths.clear()
+        self._empty_label.place(relx=0.5, rely=0.45, anchor="center")
 
     # ------------------------------------------------------------------
     # Context menu
@@ -115,6 +126,11 @@ class HistoryTable(ctk.CTkFrame):
         menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="#ffffff",
                        activebackground="#3a3a3a", activeforeground="#ffffff")
 
+        if path and os.path.isfile(path):
+            menu.add_command(label="Open file", command=lambda: self._open_file(path))
+        else:
+            menu.add_command(label="Open file", state="disabled")
+
         if path and os.path.exists(os.path.dirname(path)):
             menu.add_command(
                 label="Open containing folder",
@@ -124,6 +140,15 @@ class HistoryTable(ctk.CTkFrame):
             menu.add_command(label="Open containing folder", state="disabled")
 
         menu.tk_popup(event.x_root, event.y_root)
+
+    @staticmethod
+    def _open_file(path: str) -> None:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     @staticmethod
     def _open_folder(path: str) -> None:

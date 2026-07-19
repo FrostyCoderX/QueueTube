@@ -1,3 +1,4 @@
+import os
 import re
 import shlex
 import shutil
@@ -86,7 +87,9 @@ class Downloader:
             if self._stop_flag.is_set():
                 break
 
-            self.event_queue.put(("status", f"Downloading {idx} of {total}…"))
+            self.event_queue.put(
+                ("status", f"Downloading {idx} of {total}…" if total > 1 else "Downloading…")
+            )
             self.event_queue.put(("progress", 0.0))
 
             opts = self._build_opts(config, start_time, end_time)
@@ -110,6 +113,17 @@ class Downloader:
                     downloaded = d.get("downloaded_bytes", 0)
                     if total_bytes:
                         self.event_queue.put(("progress", downloaded / total_bytes))
+                    # Per-item progress inside playlists
+                    pl_idx = info.get("playlist_index")
+                    pl_n = info.get("playlist_count") or info.get("n_entries")
+                    if pl_idx and pl_n:
+                        base = (
+                            f"Downloading {idx}/{total} — playlist video {pl_idx} of {pl_n}"
+                            if total > 1
+                            else f"Downloading playlist video {pl_idx} of {pl_n}"
+                        )
+                    else:
+                        base = f"Downloading {idx} of {total}" if total > 1 else "Downloading"
                     speed = d.get("speed")
                     eta = d.get("eta")
                     parts = []
@@ -117,10 +131,8 @@ class Downloader:
                         parts.append(f"{_fmt_size(speed)}/s")
                     if eta is not None:
                         parts.append(f"ETA {_fmt_eta(eta)}")
-                    if parts:
-                        self.event_queue.put(
-                            ("status", f"Downloading {idx} of {total}… {' — '.join(parts)}")
-                        )
+                    tail = f" {' — '.join(parts)}" if parts else ""
+                    self.event_queue.put(("status", f"{base}…{tail}"))
                 elif d["status"] == "finished":
                     self.event_queue.put(("progress", 1.0))
                     info = d.get("info_dict", {})
@@ -147,7 +159,30 @@ class Downloader:
                     meta["size"] = _fmt_size(meta["_bytes"])
                     meta["path"] = d.get("filename", "")
 
+            def pp_hook(d: dict) -> None:
+                # MoveFiles is yt-dlp's final postprocessor; its info_dict carries
+                # the definitive output path (post-merge/conversion). It also fires
+                # in transcript mode, where no download hooks run at all.
+                if d.get("status") != "finished" or d.get("postprocessor") != "MoveFiles":
+                    return
+                info = d.get("info_dict", {})
+                vid = info.get("id") or url
+                meta = entries.setdefault(vid, {
+                    "url": url, "title": url, "size": "—",
+                    "resolution": "—", "path": "", "_bytes": 0,
+                })
+                meta["title"] = info.get("title") or meta["title"]
+                if config.get("transcript_only"):
+                    subs = info.get("requested_subtitles") or {}
+                    paths = [s.get("filepath") for s in subs.values() if s.get("filepath")]
+                    if paths:
+                        meta["path"] = paths[0]
+                        meta["resolution"] = "SRT"
+                else:
+                    meta["path"] = info.get("filepath") or meta["path"]
+
             opts["progress_hooks"] = [progress_hook]
+            opts["postprocessor_hooks"] = [pp_hook]
 
             raised = False
             cancelled = False
@@ -175,10 +210,23 @@ class Downloader:
             # On error, collected entries didn't survive postprocessing.
             for vid, meta in entries.items():
                 meta.pop("_bytes", None)
+                # Prefer the real size of the final file over the stream-sum estimate
+                if meta["path"]:
+                    try:
+                        meta["size"] = _fmt_size(os.path.getsize(meta["path"]))
+                    except OSError:
+                        pass
                 if cancelled and vid == current["vid"]:
                     meta["status"] = "■ Stopped"
                 elif raised:
                     meta["status"] = "✗ Failed"
+                elif not meta["path"]:
+                    # No output file — for transcripts this means no subtitles matched
+                    meta["status"] = "✗ Failed"
+                    if config.get("transcript_only"):
+                        self.event_queue.put(
+                            ("log", f"[WARNING] No subtitles found for: {meta['title']}")
+                        )
                 else:
                     meta["status"] = "✓ Success"
                 self.event_queue.put(("history", meta))
@@ -190,12 +238,9 @@ class Downloader:
                         "resolution": "—", "path": "", "status": "■ Stopped",
                     }))
             elif not entries:
-                # Nothing downloaded: transcript-only mode is the one legitimate
-                # case (skip_download never fires the finished hook).
-                status = "✓ Success" if success and config.get("transcript_only") else "✗ Failed"
                 self.event_queue.put(("history", {
                     "url": url, "title": url, "size": "—",
-                    "resolution": "—", "path": "", "status": status,
+                    "resolution": "—", "path": "", "status": "✗ Failed",
                 }))
             elif not success and not raised:
                 # Playlist finished with some entries skipped (ignoreerrors)
