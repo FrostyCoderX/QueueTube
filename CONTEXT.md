@@ -1,7 +1,9 @@
 # QueueTube — Build Context
 
 ## Status
-Release-ready. All features implemented, code reviewed and cleaned up. README updated for public release.
+Released and actively maintained. Last round 2026-07-20: bug fixes,
+mid-download stop, final-file tracking, UI polish, docs synced to source.
+Next planned work lives in BACKLOG.md under "Planned Next".
 
 ## Build Log
 
@@ -83,6 +85,47 @@ Created all source files from scratch:
 **Documentation:**
 - README fully rewritten with all current features, project structure, Deno/ffmpeg install instructions, and cross-platform notes.
 
+### 2026-07-20 — Bug-fix round
+**Bugs fixed:**
+- Transcript mode downloaded **every** language: `subtitleslangs: [lang, "all"]`
+  is a union in yt-dlp, not a fallback chain. Now requests only the chosen
+  language (or `all` if explicitly chosen); a missing language is an honest
+  failure instead of a silent fallback.
+- Playlists produced one garbled history row (last title, summed sizes). Now
+  one row per video keyed by video id; `ignoreerrors` enabled in playlist mode
+  so a broken video no longer aborts the rest (summary row when items skipped).
+- Invalid or reversed time ranges, and time-slicing without ffmpeg, silently
+  downloaded the full video. Download now refuses to start with a status message.
+- `config.json` containing valid-but-non-object JSON crashed the app at launch.
+- Update button claimed success while the old yt-dlp stayed loaded — now says
+  a restart is needed.
+
+### 2026-07-20 — Stop, thumbnails, sidebar redesign
+- **Mid-download Stop**: raises `DownloadCancelled` from the progress hook —
+  measured ~0.4s from click to full stop; partial `.part` files resume on
+  retry. Interrupted video shows "■ Stopped" (amber) in history; completed
+  playlist entries keep their success rows.
+- **Save thumbnail file** checkbox (off by default) — thumbnails are no longer
+  written on every download. Embedding fetches its own and keeps the file only
+  if the checkbox is on (`already_have_thumbnail`).
+- Subtitle language field now applies to embedded subtitles too (was
+  hardcoded `en`).
+- Sidebar reorganized into Format / Output / Subtitles / Music / Advanced
+  sections; URL placeholder, red active Stop, percent readout, zebra history.
+
+### 2026-07-20 — Final-file tracking, honest transcripts, playlist progress
+- History records the **final** output path via the `MoveFiles` postprocessor
+  hook (probed empirically) — post-merge/conversion path and real on-disk
+  size, plus right-click → **Open file**.
+- Transcript-only reports Failed with a log warning when no subtitles matched;
+  successes show real title, `.srt` path and size.
+- Status line shows per-item playlist progress ("playlist video 7 of 40").
+- GUI polish: "Queue" header, optional time fields without fake `0:00`,
+  left-aligned history headers (flat, no 3D bevel), Title column stretches,
+  empty-state hint, save path middle-elided (Tk can't wrap at ZWSP).
+- CLAUDE.md corrected: real design goals documented (lightweight, no server);
+  CustomTkinter noted as current choice, not a mandate.
+
 ## Key Decisions
 - Sequential downloads in one background thread (not one thread per URL) — keeps UI responsive, clean stop between URLs
 - Progress fed via `threading.Queue` — UI thread never blocked by downloader
@@ -92,9 +135,12 @@ Created all source files from scratch:
 - Remote JS solver opt-in by default — yt-dlp intentionally doesn't auto-download remote code
 - `has_ffmpeg` checked once at startup and stored — avoids repeated `shutil.which` calls during builds
 - `embed_metadata` defaults to False — prevents silent no-op on machines without ffmpeg
+- Stop cancels via `DownloadCancelled` raised from the progress hook — safe, no mid-file kill, partial files resumable
+- History rows keyed by video id; final path/size from the `MoveFiles` postprocessor hook — the one hook that carries the definitive output path
+- Design goal clarified (2026-07-20): lightweight GUI for a CLI tool with **no server process**; CustomTkinter is the current choice, not a mandate — see CLAUDE.md Design Goals
 
 ## Known Limitations
 - No packaging — run directly via `run.bat` or `python main.py`
-- Stop halts between URLs only — cannot abort a download mid-file
 - History does not persist between sessions
+- Time-slicing cuts at the nearest keyframe — cut points may be off by a few seconds
 - See BACKLOG.md for future ideas

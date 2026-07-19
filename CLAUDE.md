@@ -3,7 +3,20 @@
 ## Project Overview
 
 **QueueTube** is a standalone local Python desktop application that provides a clean GUI for `yt-dlp`.
-Built with `CustomTkinter`. No web server, no Electron, no packaging complexity — just a runnable Python app.
+
+## Design Goals
+
+The actual goals, in priority order — these outrank any implementation detail below:
+
+1. A simple GUI wrapper around a command-line tool (yt-dlp)
+2. Lightweight — minimal dependencies, fast start, small footprint
+3. **No server process** — the app runs as a plain local program; nothing listens on a port
+4. No Electron, no packaging complexity — just a runnable Python app
+
+CustomTkinter is the *current* UI choice, made for convenience — it is **not a
+requirement**. Any lightweight GUI approach that honors the no-server constraint
+is acceptable (e.g. pywebview's in-process bridge would qualify; Electron or a
+localhost web server would not). See BACKLOG.md for the considered upgrade path.
 
 ## Environment Setup
 
@@ -13,7 +26,7 @@ This project uses a virtual environment. Always activate it before running or in
 # First-time setup
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install yt-dlp customtkinter
+pip install -r requirements.txt
 
 # Run
 source venv/bin/activate
@@ -26,7 +39,7 @@ python main.py
 
 ## Tech Stack
 
-- **UI:** CustomTkinter (dark theme preferred)
+- **UI:** CustomTkinter (dark theme preferred) — current choice, not a mandate; see Design Goals
 - **Downloader:** yt-dlp (Python API, not subprocess)
 - **Media processing:** ffmpeg (system PATH, checked at startup)
 - **Config persistence:** JSON (`config.json` in app directory)
@@ -51,20 +64,26 @@ Single window. Two-column layout:
 
 ```
 ┌─────────────────────────────────┬─────────────────────┐
-│  URL INPUT AREA (multi-line)    │  SETTINGS SIDEBAR   │
-│  [Start HH:MM:SS] [End HH:MM:SS]│                     │
-│─────────────────────────────────│  Format dropdown    │
-│  [Download Queue] button        │  Playlist checkbox  │
-│─────────────────────────────────│  Auto-subfolders    │
-│  Progress bar + status label    │  Embed subtitles    │
-│─────────────────────────────────│  Embed metadata     │
-│  HISTORY TABLE (Treeview)       │  Save location      │
-│  [Show/Hide Raw Log] toggle     │  Custom args field  │
-│  RAW LOG (collapsible textbox)  │                     │
+│  QUEUE (multi-line URL box)     │  SETTINGS SIDEBAR   │
+│  [Start] [End]  (optional)      │  (scrollable)       │
+│─────────────────────────────────│                     │
+│  [Download Queue][Stop][Clear]  │  FORMAT             │
+│─────────────────────────────────│  OUTPUT             │
+│  Progress bar    + percent      │  SUBTITLES          │
+│  Status label                   │  MUSIC              │
+│─────────────────────────────────│  ADVANCED           │
+│  HISTORY TABLE (Treeview)       │                     │
+│  [Show/Hide Raw Log] toggle     │  (sections hold the │
+│  RAW LOG (collapsible textbox)  │   settings below)   │
 └─────────────────────────────────┴─────────────────────┘
 ```
 
 ## Feature Spec
+
+> **Note:** Last synced to the source on 2026-07-20. If they ever differ, the
+> source code is authoritative — see CONTEXT.md for the build log. Keep the
+> code-level constants (format map, defaults) in config.py only; this file
+> deliberately does not duplicate them.
 
 ### URL Input
 - Multi-line `CTkTextbox`, one URL per line
@@ -76,23 +95,24 @@ Single window. Two-column layout:
 
 | Setting | UI Element | yt-dlp mapping |
 |---|---|---|
-| Format | Dropdown | See format map below |
-| Download playlists | Checkbox (default OFF) | `noplaylist: True/False` |
+| Format | Dropdown | `FORMAT_MAP` in config.py (8 entries incl. MP4 variants and Audio Only MP3/Opus) |
+| Download playlists | Checkbox (default OFF) | `noplaylist: True/False` (+ `ignoreerrors` when ON) |
+| Skip sponsor segments | Checkbox | `sponsorblock_remove: [sponsor, intro, outro]` |
+| Filename template | Dropdown | `FILENAME_TEMPLATES` in config.py |
 | Auto-subfolders | Checkbox | `outtmpl` includes `%(uploader)s/` prefix |
-| Embed subtitles | Checkbox | `writesubtitles`, `subtitleslangs: ['en']`, `embedsubtitles` |
-| Embed metadata + thumbnail | Checkbox | `embedmetadata`, `embedthumbnail`, `writethumbnail` |
+| Save thumbnail file | Checkbox (default OFF) | `writethumbnail` |
+| Embed metadata + thumbnail | Checkbox | `embedmetadata`, `embedthumbnail` + postprocessors |
+| Embed subtitles | Checkbox | `writesubtitles`, `embedsubtitles`, language from the shared Language field |
+| Transcript only (.srt) | Checkbox + Language field | `skip_download`, `writesubtitles`, `writeautomaticsub`, `subtitleslangs` |
+| Embed album art | Checkbox | `embedthumbnail` + `EmbedThumbnail` postprocessor |
 | Save location | Folder picker button | `paths: {'home': selected_dir}` |
-| Custom args | Single-line text input | Appended raw (parsed carefully) |
+| Cookies from browser | Dropdown | `cookiesfrombrowser` |
+| Remote JS solver | Checkbox (default OFF) | `--remote-components ejs:github` via `parse_options` |
+| Custom args | Single-line text input | `shlex.split` + `parse_options`, only non-default values merged |
 
-**Format dropdown map:**
-```python
-FORMAT_MAP = {
-    "Best Available":  "bestvideo+bestaudio/best",
-    "1080p Limit":     "bestvideo[height<=1080]+bestaudio/best",
-    "720p Limit":      "bestvideo[height<=720]+bestaudio/best",
-    "Audio Only (MP3)": None,  # triggers extract_audio + audio_format: mp3
-}
-```
+The authoritative format map and defaults live in `config.py`
+(`FORMAT_MAP`, `FILENAME_TEMPLATES`, `DEFAULTS`) — do not copy values
+from this file into code; read config.py instead.
 
 ### Download Engine (`downloader.py`)
 - Use `yt-dlp` Python API (`yt_dlp.YoutubeDL`), not subprocess
@@ -100,7 +120,9 @@ FORMAT_MAP = {
 - Download URLs **sequentially** in a single background thread (do not spawn one thread per URL)
 - Progress hook function passed to `ydl_opts` → emits progress back to UI via queue or callback
 - On completion of each URL, fire a callback to update history table
-- Thread must be stoppable (set a flag; check between URLs — do not kill mid-download)
+- Thread must be stoppable; Stop cancels the in-progress download safely by
+  raising `DownloadCancelled` from the progress hook (partial `.part` files
+  resume on retry)
 
 ### Progress Feedback
 - `CTkProgressBar` — updates per `progress_hook` `downloaded_bytes / total_bytes`
@@ -121,20 +143,11 @@ FORMAT_MAP = {
 - Auto-scrolls to bottom on new output
 
 ### Config (`config.py`)
-- Loads `config.json` on startup; writes on every settings change (or on app close)
-- If file missing or malformed → silently fall back to defaults
-- Defaults:
-```python
-DEFAULTS = {
-    "format": "Best Available",
-    "noplaylist": True,
-    "auto_subfolders": False,
-    "embed_subtitles": False,
-    "embed_metadata": True,
-    "save_location": "~/Downloads",
-    "custom_args": ""
-}
-```
+- Loads `config.json` on startup; writes on every settings change
+- If file missing, malformed, or not a JSON object → silently fall back to defaults
+- Missing keys are backfilled from `DEFAULTS` (so new settings never crash old configs)
+- The authoritative `DEFAULTS` dict lives in `config.py` — every new setting
+  must be added there with a sensible default
 
 ### ffmpeg Check
 - On app startup, run `shutil.which("ffmpeg")`
@@ -145,12 +158,31 @@ DEFAULTS = {
 ## Key Commands
 
 ```bash
-# Install dependencies
-pip install yt-dlp customtkinter
+# Install dependencies (inside the venv)
+pip install -r requirements.txt
 
 # Run
 python main.py
 ```
+
+## Verification Pattern
+
+How changes get verified in this project (established 2026-07-20):
+
+- **Compile check**: `py_compile` on all five modules after every edit batch.
+- **Stub tests**: replace `downloader.yt_dlp.YoutubeDL` with a fake class whose
+  `download()` replays scripted progress/postprocessor hook events, then assert
+  on the history/status events drained from `Downloader.event_queue`. This
+  covers playlist, cancel, transcript, and failure branches without network.
+- **Real E2E**: download `https://www.youtube.com/watch?v=jNQXAC9IVRw`
+  ("Me at the zoo", 19s — small and stable) into the session scratchpad, and
+  assert on history events and files on disk. Clean up the files afterwards.
+- **GUI construction test**: instantiate `App()`, call `.update()`, assert on
+  widget state, then `.destroy()` — catches wiring errors without a visual check.
+- **Visual checks**: ask the user for a Win+Shift+S snip of the window rather
+  than capturing the desktop.
+- On Windows use `./venv/Scripts/python.exe` and set `PYTHONIOENCODING=utf-8`
+  when test output contains ✓/✗/■ glyphs (cp1252 console chokes otherwise).
 
 ## Constraints & Notes
 
