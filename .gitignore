@@ -1,5 +1,6 @@
-# Claude Code instructions (AI tooling, not needed by end users)
+# Local AI tooling instructions (not needed by end users)
 CLAUDE.md
+AGENTS.md
 
 # Virtual environment
 venv/
