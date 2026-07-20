@@ -4,7 +4,7 @@ A clean desktop GUI for [yt-dlp](https://github.com/yt-dlp/yt-dlp). Paste URLs, 
 
 Works with YouTube, Vimeo, SoundCloud, and [1000+ other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) that yt-dlp supports.
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 
 ![QueueTube UI](UI.PNG)
 
@@ -54,7 +54,7 @@ Works with YouTube, Vimeo, SoundCloud, and [1000+ other sites](https://github.co
 
 ## Requirements
 
-- **Python 3.10+**
+- **Python 3.11+**
 - **[Deno](https://deno.com/)** — required for YouTube downloads (yt-dlp uses it to solve JS challenges)
 - **[ffmpeg](https://ffmpeg.org/)** *(optional)* — needed for time-slicing, subtitles, metadata embedding, SponsorBlock, album art, and MP3 extraction
 

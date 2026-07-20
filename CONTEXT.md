@@ -126,6 +126,13 @@ Created all source files from scratch:
 - CLAUDE.md corrected: real design goals documented (lightweight, no server);
   CustomTkinter noted as current choice, not a mandate.
 
+### 2026-07-20 — URL placeholder fix and Python baseline
+- Fixed the queue placeholder remaining editable after Clear when the textbox
+  retained keyboard focus; typing and pasting now remove the simulated
+  placeholder before inserting a URL.
+- Raised the documented Python baseline from 3.10 to 3.11 because current
+  yt-dlp releases deprecate Python 3.10.
+
 ## Key Decisions
 - Sequential downloads in one background thread (not one thread per URL) — keeps UI responsive, clean stop between URLs
 - Progress fed via `threading.Queue` — UI thread never blocked by downloader

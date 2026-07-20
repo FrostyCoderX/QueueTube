@@ -125,8 +125,9 @@ class App(ctk.CTk):
 
         self._url_box = ctk.CTkTextbox(left, height=120, wrap="none")
         self._url_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._url_box.bind("<KeyPress>", self._url_key_press)
         self._url_box.bind("<KeyRelease>", lambda _: self._update_url_count())
-        self._url_box.bind("<<Paste>>",    lambda _: self.after(50, self._update_url_count))
+        self._url_box.bind("<<Paste>>", self._url_paste)
         # Placeholder text (CTkTextbox has no built-in placeholder support)
         self._url_text_color = self._url_box.cget("text_color")
         self._url_ph_active = False
@@ -636,13 +637,27 @@ class App(ctk.CTk):
             self._url_box.insert("1.0", "Paste video URLs — one per line")
 
     def _url_focus_in(self, _event=None) -> None:
+        self._clear_url_placeholder()
+
+    def _url_focus_out(self, _event=None) -> None:
+        self._show_url_placeholder()
+
+    def _url_key_press(self, _event=None) -> None:
+        # Clear the simulated placeholder before Tk inserts typed text.  This is
+        # needed after Clear because clicking a button does not necessarily move
+        # keyboard focus away from the textbox, so FocusIn may not fire again.
+        self._clear_url_placeholder()
+
+    def _url_paste(self, _event=None) -> None:
+        # Instance bindings run before the textbox class performs the paste.
+        self._clear_url_placeholder()
+        self.after(50, self._update_url_count)
+
+    def _clear_url_placeholder(self) -> None:
         if self._url_ph_active:
             self._url_ph_active = False
             self._url_box.delete("1.0", "end")
             self._url_box.configure(text_color=self._url_text_color)
-
-    def _url_focus_out(self, _event=None) -> None:
-        self._show_url_placeholder()
 
     def _get_urls(self) -> list[str]:
         if self._url_ph_active:
